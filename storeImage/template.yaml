@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  storeImage
+
+  Sample SAM Template for storeImage
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+
+Resources:
+  storeImage:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: "arn:aws:iam::292597057072:role/LabRole"
+      CodeUri: ./
+      Handler: app.lambdaHandler
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64

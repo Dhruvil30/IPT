@@ -1,0 +1,300 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Cloud Term Project'
+
+Parameters:
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - m3.medium
+      - m3.large
+    ConstraintDescription: Valid EC2 instance type.
+
+Resources:
+
+  InputBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: 'tp-ipt-input-bucket'
+
+  OutputBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: 'tp-ipt-output-bucket'
+
+  ImageProcessingQueue:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName: 'TPImageProcessingQueue'
+      VisibilityTimeout: 300
+
+  StoreImageFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'app.lambdaHandler'
+      Runtime: 'nodejs14.x'
+      Timeout: 30
+      Role: "arn:aws:iam::292597057072:role/LabRole"
+      Code:
+        S3Bucket: 'tp-lambda-functions'
+        S3Key: 'storeImage.zip'
+      Environment:
+        Variables:
+          INPUT_BUCKET_NAME: !Ref InputBucket
+          SQS_QUEUE_URL: !Ref ImageProcessingQueue
+
+  CompressImageFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'app.lambdaHandler'
+      Runtime: 'nodejs14.x'
+      Timeout: 30
+      Role: "arn:aws:iam::292597057072:role/LabRole"
+      Code:
+        S3Bucket: 'tp-lambda-functions'
+        S3Key: 'compressImage.zip'
+      Environment:
+        Variables:
+          INPUT_BUCKET_NAME: !Ref InputBucket
+          OUTPUT_BUCKET_NAME: !Ref OutputBucket
+
+  ConvertImageFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'app.lambdaHandler'
+      Runtime: 'nodejs14.x'
+      Timeout: 30
+      Role: "arn:aws:iam::292597057072:role/LabRole"
+      Code:
+        S3Bucket: 'tp-lambda-functions'
+        S3Key: 'convertImage.zip'
+      Environment:
+        Variables:
+          INPUT_BUCKET_NAME: !Ref InputBucket
+          OUTPUT_BUCKET_NAME: !Ref OutputBucket
+
+  DetectLabelsFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'app.lambdaHandler'
+      Runtime: 'nodejs14.x'
+      Timeout: 30
+      Role: "arn:aws:iam::292597057072:role/LabRole"
+      Code:
+        S3Bucket: 'tp-lambda-functions'
+        S3Key: 'detectLabels.zip'
+      Environment:
+        Variables:
+          INPUT_BUCKET_NAME: !Ref InputBucket
+
+  ResizeImageFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'app.lambdaHandler'
+      Runtime: 'nodejs14.x'
+      Timeout: 30
+      Role: "arn:aws:iam::292597057072:role/LabRole"
+      Code:
+        S3Bucket: 'tp-lambda-functions'
+        S3Key: 'resizeImage.zip'
+      Environment:
+        Variables:
+          INPUT_BUCKET_NAME: !Ref InputBucket
+          OUTPUT_BUCKET_NAME: !Ref OutputBucket
+
+  SendMailFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'app.lambdaHandler'
+      Runtime: 'nodejs14.x'
+      Timeout: 30
+      Role: "arn:aws:iam::292597057072:role/LabRole"
+      Code:
+        S3Bucket: 'tp-lambda-functions'
+        S3Key: 'sendMail.zip'
+
+  ImageProcessingStateMachine:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString:
+        !Sub |
+          {
+            "Comment": "A state machine that processes image based on desired operation.",
+            "StartAt": "ChooseOperation",
+            "States": {
+              "ChooseOperation": {
+                "Type": "Choice",
+                "Choices": [
+                  {
+                    "Variable": "$.operation",
+                    "StringEquals": "compress",
+                    "Next": "InvokeCompressLambda"
+                  },
+                  {
+                    "Variable": "$.operation",
+                    "StringEquals": "resize",
+                    "Next": "InvokeResizeLambda"
+                  },
+                  {
+                    "Variable": "$.operation",
+                    "StringEquals": "convert",
+                    "Next": "InvokeConvertLambda"
+                  },
+                  {
+                    "Variable": "$.operation",
+                    "StringEquals": "analyze",
+                    "Next": "InvokeDetectLabelsLambda"
+                  }
+                ],
+                "Default": "UnknownOperation"
+              },
+              "InvokeCompressLambda": {
+                "Type": "Task",
+                "Resource": "${CompressImageFunction.Arn}",
+                "Next": "SendMail"
+              },
+              "InvokeResizeLambda": {
+                "Type": "Task",
+                "Resource": "${ResizeImageFunction.Arn}",
+                "Next": "SendMail"
+              },
+              "InvokeConvertLambda": {
+                "Type": "Task",
+                "Resource": "${ConvertImageFunction.Arn}",
+                "Next": "SendMail"
+              },
+              "InvokeDetectLabelsLambda": {
+                "Type": "Task",
+                "Resource": "${DetectLabelsFunction.Arn}",
+                "Next": "SendMail"
+              },
+              "SendMail": {
+                "Type": "Task",
+                "Resource": "${SendMailFunction.Arn}",
+                "End": true
+              },
+              "UnknownOperation": {
+                "Type": "Fail",
+                "Error": "UnknownOperation",
+                "Cause": "The operation is not recognized."
+              }
+            }
+          }
+      RoleArn: arn:aws:iam::292597057072:role/LabRole
+      StateMachineName: ImageProcessingStateMachine
+
+  EventListnerFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'app.lambdaHandler'
+      Runtime: 'nodejs14.x'
+      Timeout: 30
+      Role: "arn:aws:iam::292597057072:role/LabRole"
+      Code:
+        S3Bucket: 'tp-lambda-functions'
+        S3Key: 'eventListner.zip'
+      Environment:
+        Variables:
+          SQS_QUEUE_URL: !Ref ImageProcessingQueue
+          STATE_MACHINE_ARN: !Ref ImageProcessingStateMachine
+
+  EventListnerSQSEventSource:
+    Type: "AWS::Lambda::EventSourceMapping"
+    Properties:
+      EventSourceArn: !GetAtt ImageProcessingQueue.Arn
+      FunctionName: !GetAtt EventListnerFunction.Arn
+      BatchSize: 1
+
+  StoreImageAPI:
+    Type: "AWS::ApiGatewayV2::Api"
+    Properties:
+      Name: "StoreImageAPI"
+      ProtocolType: "HTTP"
+      CorsConfiguration:
+        AllowMethods:
+          - "POST"
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - "*"
+
+  LambdaExecutionPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !Ref StoreImageFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${StoreImageAPI}/*/*"
+
+  StoreImageFunctionIntegration:
+    Type: "AWS::ApiGatewayV2::Integration"
+    DependsOn:
+      - StoreImageFunction
+    Properties:
+      ApiId: !Ref StoreImageAPI
+      IntegrationType: "AWS_PROXY"
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${StoreImageFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
+
+  StoreImageRoute:
+    Type: "AWS::ApiGatewayV2::Route"
+    DependsOn:
+      - StoreImageFunctionIntegration
+    Properties:
+      ApiId: !Ref StoreImageAPI
+      RouteKey: "POST /store-image"
+      Target: !Sub "integrations/${StoreImageFunctionIntegration}"
+
+  StoreImageDeployment:
+    Type: "AWS::ApiGatewayV2::Deployment"
+    DependsOn: StoreImageRoute
+    Properties:
+      ApiId: !Ref StoreImageAPI
+
+  APIGatewayStage:
+    Type: "AWS::ApiGatewayV2::Stage"
+    Properties:
+      ApiId: !Ref StoreImageAPI
+      StageName: "$default"
+      DeploymentId: !Ref StoreImageDeployment
+      AutoDeploy: true
+
+  InstanceSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Security group for the EC2.
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 6000
+          CidrIp: 0.0.0.0/0
+
+  EC2Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: ami-05548f9cecf47b442
+      KeyName: vockey
+      SecurityGroups:
+        - !Ref InstanceSecurityGroup
+      Tags:
+        - Key: Name
+          Value: TP_EC2
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo yum update -y
+          sudo yum install -y aws-cli
+          sudo yum install -y git
+          git clone https://github.com/dhruvilDal/ipt-view.git /home/ec2-user/ipt-view
+          sudo yum install -y nodejs
+          cd /home/ec2-user/ipt-view
+
+          echo "REACT_APP_API_URL=https://${StoreImageAPI}.execute-api.${AWS::Region}.amazonaws.com/store-image" > /home/ec2-user/ipt-view/.env
+
+          npm install
+          npm start
